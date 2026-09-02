@@ -8,6 +8,9 @@ Play it at **https://hst99-pancil.github.io/reversi/**
 
 ## Three ways to play
 
+The board never marks your legal squares. Finding a move is part of playing;
+click a square that traps nothing and it shrugs you off and tells you why.
+
 **Computer** — you are the Panther against a snow leopard that searches ahead
 with alpha-beta. The difficulty setting is simply how far it looks: two, three,
 or four moves. There is a coach that explains what each move did, an undo, and a

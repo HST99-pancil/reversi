@@ -188,18 +188,21 @@
   .cell:last-child{box-shadow:none}
   .cell.star::before{content:"";position:absolute;right:-3px;bottom:-3px;width:6px;height:6px;
     border-radius:50%;background:var(--star)}
-  .cell.playable{cursor:pointer}
+  .cell.open{cursor:pointer}
   .cell:focus-visible{outline:3px solid #FFE6B8;outline-offset:-4px;z-index:5}
 
-  .marker{position:absolute;width:26%;height:26%;border-radius:50%;
-    border:2px solid rgba(255,236,200,.85);background:rgba(255,236,200,.16);
-    transition:width .16s ease,height .16s ease;pointer-events:none}
-  .cell.playable:hover .marker,.cell.playable:focus-visible .marker{
-    width:74%;height:74%;background:rgba(255,236,200,.22)}
-  .badge{position:absolute;top:3px;right:4px;font-family:var(--mono);font-size:10px;
-    color:rgba(255,244,225,.92);opacity:0;transition:opacity .15s ease;pointer-events:none}
-  .cell.playable:hover .badge,.cell.playable:focus-visible .badge{opacity:1}
-  @media (hover:none){.cell.playable .badge{opacity:.95}}
+  /* an illegal square says so, so a dead click never reads as a frozen board */
+  .cell.wrong{animation:wrong .34s ease}
+  @keyframes wrong{0%,100%{transform:none}
+    20%{transform:translateX(-3px)}55%{transform:translateX(3px)}80%{transform:translateX(-1px)}}
+  .cell.wrong::after{content:"";position:absolute;inset:22%;border-radius:50%;
+    border:2px solid rgba(255,150,130,.85)}
+
+  /* the hint button is the one place a square is still pointed out */
+  .cell.hint-best::after{content:"";position:absolute;inset:13%;border-radius:50%;
+    border:3px solid rgba(255,230,160,.95);background:rgba(255,230,160,.16);
+    animation:hintpulse 1.3s ease-in-out infinite}
+  @keyframes hintpulse{0%,100%{transform:scale(1);opacity:.95}50%{transform:scale(1.12);opacity:.6}}
 
   .disc-wrap{position:absolute;width:80%;height:80%;display:flex;align-items:center;
     justify-content:center;perspective:600px;pointer-events:none}
@@ -214,11 +217,6 @@
   .face.w{transform:rotateY(180deg);
     background:radial-gradient(70% 70% at 32% 26%, #FFFFFF, var(--disc-w) 58%, #D2CCC0 100%);
     box-shadow:inset 0 -2px 4px rgba(0,0,0,.2), 0 2px 3px rgba(0,0,0,.35)}
-  .disc-wrap.will-flip::after{content:"";position:absolute;inset:-8%;border-radius:50%;
-    border:2px dashed rgba(255,226,160,.95)}
-  .ghost{position:absolute;width:80%;height:80%;border-radius:50%;opacity:.42;pointer-events:none}
-  .ghost.b{background:var(--disc-b)}
-  .ghost.w{background:var(--disc-w)}
 
   .status{margin:0;min-height:1.6em;font-size:15px;color:var(--ink-2);max-width:620px}
   .status strong{color:var(--ink)}
@@ -456,7 +454,8 @@
       <div class="card">
         <h2>How to play</h2>
         <ol class="rules">
-          <li><b>1</b><span>Panther moves first. Rings mark your legal squares.</span></li>
+          <li><b>1</b><span>Panther moves first. Nothing marks your legal squares &mdash; finding
+            them is half the game. Click a square that traps nothing and it will shrug you off.</span></li>
           <li><b>2</b><span>Trap a straight line of your opponent&rsquo;s discs between the disc you
             place and one of yours. Everything trapped flips.</span></li>
           <li><b>3</b><span>No legal move means you pass. When neither side can move, the most discs
@@ -698,12 +697,7 @@
       b.type = "button";
       b.dataset.i = i;
       b.setAttribute("aria-label", sq(i));
-      b.innerHTML = `<span class="marker" hidden></span><span class="badge"></span>`;
       b.addEventListener("click", () => onCellClick(i));
-      b.addEventListener("mouseenter", () => preview(i));
-      b.addEventListener("focus", () => preview(i));
-      b.addEventListener("mouseleave", clearPreview);
-      b.addEventListener("blur", clearPreview);
       boardEl.appendChild(b);
       cells.push(b);
     }
@@ -776,14 +770,11 @@
           }
         }
       }
-      const legal = S.moves.has(i) && S.turn === S.me && !S.over && !S.busy;
-      const marker = cell.querySelector(".marker");
-      const badge = cell.querySelector(".badge");
-      cell.classList.toggle("playable", legal);
-      cell.classList.toggle("hint-best", legal && S.hintAt === i);
-      marker.hidden = !legal;
-      badge.textContent = legal ? "+" + S.moves.get(i).flat.length : "";
-      cell.disabled = !legal;
+      const yourTurn = S.turn === S.me && !S.over && !S.busy;
+      const open = yourTurn && S.board[i] === 0;
+      cell.classList.toggle("open", open);
+      cell.classList.toggle("hint-best", open && S.hintAt === i);
+      cell.disabled = !open;
     }
     const t = tally(S.board);
     $("score-b").textContent = t.b;
@@ -825,22 +816,6 @@
     setTimeout(() => { el.dataset.locked = "0"; updateCats(); }, 1100);
   }
 
-  function preview(i){
-    if (!S.moves.has(i) || S.turn !== S.me || S.over || S.busy) return;
-    for (const f of S.moves.get(i).flat){
-      const w = cells[f].querySelector(".disc-wrap");
-      if (w) w.classList.add("will-flip");
-    }
-    const g = document.createElement("span");
-    g.className = "ghost " + (S.me === BLACK ? "b" : "w");
-    cells[i].appendChild(g);
-  }
-
-  function clearPreview(){
-    boardEl.querySelectorAll(".will-flip").forEach(el => el.classList.remove("will-flip"));
-    boardEl.querySelectorAll(".ghost").forEach(el => el.remove());
-  }
-
   function status(html){ $("status").innerHTML = html; }
 
   function whoLine(){
@@ -864,9 +839,21 @@
     return d;
   }
 
+  let wrongTimer = null;
+  function rejectSquare(i){
+    const cell = cells[i];
+    cell.classList.remove("wrong");
+    void cell.offsetWidth;                 // restart the animation on a repeat click
+    cell.classList.add("wrong");
+    clearTimeout(wrongTimer);
+    wrongTimer = setTimeout(() => cell.classList.remove("wrong"), 700);
+    status("<strong>" + sq(i) + "</strong> traps nothing. A move has to sandwich a line of " +
+      "your opponent's discs between the disc you place and one of yours.");
+  }
+
   function onCellClick(i){
-    if (S.over || S.busy || S.turn !== S.me || !S.moves.has(i)) return;
-    clearPreview();
+    if (S.over || S.busy || S.turn !== S.me || S.board[i] !== 0) return;
+    if (!S.moves.has(i)){ rejectSquare(i); return; }
     if (MODE === "solo"){ soloMove(i); return; }
     if (MODE === "code"){ codeMove(i); return; }
     if (NET.phase !== "live" || NET.colour === null || S.turn !== NET.colour) return;
