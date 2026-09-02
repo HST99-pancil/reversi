@@ -230,6 +230,28 @@
   .card h2{margin:0 0 12px;font-family:var(--body);font-size:11px;font-weight:600;
     letter-spacing:.18em;text-transform:uppercase;color:var(--ink-3)}
 
+  .tabs{display:flex;gap:6px;margin-top:4px;padding:4px;background:var(--surface);
+    border:1px solid var(--line-soft);border-radius:11px;align-self:flex-start}
+  .tab{font-family:var(--body);font-size:13px;font-weight:600;letter-spacing:.03em;
+    padding:8px 15px;border-radius:8px;border:0;background:transparent;color:var(--ink-2);cursor:pointer}
+  .tab[aria-selected="true"]{background:var(--accent);color:var(--accent-ink)}
+  .tab:hover:not([aria-selected="true"]){color:var(--ink);background:var(--surface-2)}
+  .tab:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  select{width:100%;font-family:var(--body);font-size:13px;padding:9px 10px;border-radius:8px;
+    border:1px solid var(--line);background:var(--surface-2);color:var(--ink);cursor:pointer}
+  select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  .coach p{margin:0 0 10px;font-size:14px;line-height:1.55;color:var(--ink-2)}
+  .coach p:last-child{margin-bottom:0}
+  .coach strong{color:var(--ink);font-weight:600}
+  .coach code{font-family:var(--mono);font-size:.9em;background:var(--accent-soft);
+    color:var(--accent);padding:1px 5px;border-radius:4px}
+  .coach .note{border-left:3px solid var(--line);padding:8px 12px;border-radius:0 8px 8px 0}
+  .coach .note.good{border-color:var(--good);background:var(--good-soft)}
+  .coach .note.warn{border-color:var(--warn);background:var(--warn-soft)}
+  .coach .note.bad{border-color:var(--bad);background:var(--bad-soft)}
+
   .subtabs{display:flex;gap:4px;margin:0 0 14px;padding:3px;background:var(--surface-2);
     border:1px solid var(--line-soft);border-radius:10px}
   .subtab{flex:1;font-family:var(--body);font-size:12px;font-weight:600;letter-spacing:.03em;
@@ -302,8 +324,13 @@
 
 <div class="page">
   <header class="masthead">
-    <p class="eyebrow">リバーシ &middot; two players, one board</p>
+    <p class="eyebrow">リバーシ &middot; reversi / othello</p>
     <h1>Big Cat Reversi</h1>
+    <nav class="tabs" role="tablist" aria-label="Who you are playing">
+      <button class="tab" role="tab" id="tab-solo" aria-selected="true">Computer</button>
+      <button class="tab" role="tab" id="tab-online" aria-selected="false">Online</button>
+      <button class="tab" role="tab" id="tab-code" aria-selected="false">By code</button>
+    </nav>
   </header>
 
   <main class="stage">
@@ -339,12 +366,30 @@
     </section>
 
     <aside class="rail">
-      <div class="card">
-        <h2>Play together</h2>
-        <div class="subtabs" role="tablist">
-          <button class="subtab" id="sub-online" role="tab" aria-selected="true">Online</button>
-          <button class="subtab" id="sub-code" role="tab" aria-selected="false">By code</button>
+      <div class="card" id="opponent-card">
+        <h2>Opponent</h2>
+        <div class="field">
+          <label for="opponent">How far the Snow Leopard looks</label>
+          <select id="opponent">
+            <option value="2">Thinks 2 moves ahead</option>
+            <option value="3" selected>Thinks 3 moves ahead</option>
+            <option value="4">Thinks 4 moves ahead</option>
+          </select>
         </div>
+        <div class="row">
+          <button class="btn" id="btn-undo">Undo</button>
+          <button class="btn" id="btn-hint">Hint</button>
+          <button class="btn primary" id="btn-new">New game</button>
+        </div>
+      </div>
+
+      <div class="card coach" id="coach-card">
+        <h2>Coach</h2>
+        <div id="coach"></div>
+      </div>
+
+      <div class="card" id="connect-card">
+        <h2>Play together</h2>
 
         <div id="online-panel">
           <p class="hint" id="net-status">Not connected yet.</p>
@@ -670,13 +715,18 @@
     turn: BLACK,
     me: null,            // BLACK, WHITE, or null while spectating
     over: false,
+    busy: false,
     moves: new Map(),
+    history: [],
+    hintAt: null,
     last: -1,
     lastBy: 0,
-    note: ""
+    note: "",
+    depth: 3             // how many moves ahead the computer looks
   };
 
   let codeStarted = false;
+  let MODE = "solo";     // "solo" | "online" | "code"
 
   const LS = {
     get(k, d){ try { return localStorage.getItem(k) || d; } catch (e){ return d; } },
@@ -726,10 +776,11 @@
           }
         }
       }
-      const legal = S.moves.has(i) && S.turn === S.me && !S.over;
+      const legal = S.moves.has(i) && S.turn === S.me && !S.over && !S.busy;
       const marker = cell.querySelector(".marker");
       const badge = cell.querySelector(".badge");
       cell.classList.toggle("playable", legal);
+      cell.classList.toggle("hint-best", legal && S.hintAt === i);
       marker.hidden = !legal;
       badge.textContent = legal ? "+" + S.moves.get(i).flat.length : "";
       cell.disabled = !legal;
@@ -775,7 +826,7 @@
   }
 
   function preview(i){
-    if (!S.moves.has(i) || S.turn !== S.me || S.over) return;
+    if (!S.moves.has(i) || S.turn !== S.me || S.over || S.busy) return;
     for (const f of S.moves.get(i).flat){
       const w = cells[f].querySelector(".disc-wrap");
       if (w) w.classList.add("will-flip");
@@ -803,6 +854,7 @@
     if (S.me === null) return lead + "Watching. " + name(S.turn) + " to play.";
     if (S.turn === S.me) return lead + "Your move &mdash; " + S.moves.size + " legal " +
       (S.moves.size === 1 ? "square" : "squares") + ".";
+    if (MODE === "solo") return lead + "Snow Leopard is thinking.";
     return lead + "Waiting for " + name(S.turn) + ".";
   }
 
@@ -813,9 +865,10 @@
   }
 
   function onCellClick(i){
-    if (S.over || S.turn !== S.me || !S.moves.has(i)) return;
+    if (S.over || S.busy || S.turn !== S.me || !S.moves.has(i)) return;
     clearPreview();
-    if (F.sub !== "live"){ codeMove(i); return; }
+    if (MODE === "solo"){ soloMove(i); return; }
+    if (MODE === "code"){ codeMove(i); return; }
     if (NET.phase !== "live" || NET.colour === null || S.turn !== NET.colour) return;
     if (NET.host){
       const lines = linesFor(S.board, i, NET.colour);
@@ -826,6 +879,204 @@
     } else {
       send({ t: "move", i });          // the host decides and sends the result back
     }
+  }
+
+  // ----------------------------------------------------------- the computer
+  // One search, three strengths: the difficulty setting is simply how many
+  // moves ahead it looks.
+  const WEIGHTS = [
+    120,-24, 18,  6,  6, 18,-24,120,
+    -24,-45, -4, -2, -2, -4,-45,-24,
+     18, -4,  6,  2,  2,  6, -4, 18,
+      6, -2,  2,  1,  1,  2, -2,  6,
+      6, -2,  2,  1,  1,  2, -2,  6,
+     18, -4,  6,  2,  2,  6, -4, 18,
+    -24,-45, -4, -2, -2, -4,-45,-24,
+    120,-24, 18,  6,  6, 18,-24,120
+  ];
+
+  function evaluate(board, p){
+    const foe = other(p);
+    let score = 0;
+    for (let i = 0; i < 64; i++){
+      if (board[i] === p) score += WEIGHTS[i];
+      else if (board[i] === foe) score -= WEIGHTS[i];
+    }
+    const mine = legalMoves(board, p).size, theirs = legalMoves(board, foe).size;
+    if (mine + theirs) score += 90 * (mine - theirs) / (mine + theirs);
+    return score;
+  }
+
+  function negamax(board, p, depth, alpha, beta){
+    const moves = legalMoves(board, p);
+    if (!moves.size){
+      if (!legalMoves(board, other(p)).size){
+        const t = tally(board);
+        const diff = p === BLACK ? t.b - t.w : t.w - t.b;
+        return 10000 * Math.sign(diff) + diff;
+      }
+      return -negamax(board, other(p), depth - 1, -beta, -alpha);
+    }
+    if (depth <= 0) return evaluate(board, p);
+    let best = -Infinity;
+    const ordered = [...moves.keys()].sort((a, b) => WEIGHTS[b] - WEIGHTS[a]);
+    for (const i of ordered){
+      const v = -negamax(applyMove(board, i, p, moves.get(i).flat), other(p), depth - 1, -beta, -alpha);
+      if (v > best) best = v;
+      if (best > alpha) alpha = best;
+      if (alpha >= beta) break;
+    }
+    return best;
+  }
+
+  function chooseMove(board, p, depth){
+    const moves = legalMoves(board, p);
+    if (!moves.size) return null;
+    let best = -Infinity, pick = null;
+    for (const i of moves.keys()){
+      const v = -negamax(applyMove(board, i, p, moves.get(i).flat), other(p),
+                         depth - 1, -Infinity, Infinity);
+      if (v > best){ best = v; pick = i; }
+    }
+    return pick;
+  }
+
+  // ------------------------------------------------------------------ coach
+  const X_SQUARES = [9, 14, 49, 54];
+  const C_SQUARES = [1, 8, 6, 15, 48, 57, 55, 62];
+  const GUARDS = {9:0, 1:0, 8:0, 14:7, 6:7, 15:7, 49:56, 48:56, 57:56, 54:63, 55:63, 62:63};
+
+  function squareKind(i){
+    if (CORNERS.includes(i)) return "corner";
+    if (X_SQUARES.includes(i)) return "x";
+    if (C_SQUARES.includes(i)) return "c";
+    const [r, c] = rc(i);
+    return (r === 0 || r === 7 || c === 0 || c === 7) ? "edge" : "centre";
+  }
+
+  const say = html => { $("coach").innerHTML = html; };
+  const add = html => { $("coach").insertAdjacentHTML("beforeend", html); };
+
+  function moveReport(before, i, p, flat){
+    const after = applyMove(before, i, p, flat);
+    const foe = other(p);
+    const kind = squareKind(i);
+    const foeMoves = legalMoves(after, foe);
+    const foeBefore = legalMoves(before, foe).size;
+    const notes = [];
+
+    if (kind === "corner"){
+      notes.push(["good", "<strong>" + sq(i) + " is a corner.</strong> Nothing can ever sandwich it, " +
+        "so that disc is yours for the rest of the game."]);
+    } else if (kind === "x" && after[GUARDS[i]] === 0){
+      notes.push(["bad", "<strong>" + sq(i) + " is an X&#8209;square</strong>, diagonally next to the " +
+        "empty corner <code>" + sq(GUARDS[i]) + "</code>. It is the usual way a corner gets given away."]);
+    } else if (kind === "c" && after[GUARDS[i]] === 0){
+      notes.push(["warn", "<code>" + sq(i) + "</code> sits one step from the empty corner <code>" +
+        sq(GUARDS[i]) + "</code>. Playable, but it loosens your grip on that corner."]);
+    }
+
+    const corners = CORNERS.filter(c => foeMoves.has(c));
+    if (corners.length){
+      notes.push(["bad", name(foe) + " can now take <code>" +
+        corners.map(sq).join("</code>, <code>") + "</code>."]);
+    }
+    if (!foeMoves.size){
+      notes.push(["good", name(foe) + " has no legal reply and must pass."]);
+    } else if (foeMoves.size <= 2 && foeMoves.size < foeBefore){
+      notes.push(["good", name(foe) + " is down to " + foeMoves.size + " legal " +
+        (foeMoves.size === 1 ? "reply" : "replies") + ". Squeezing the reply count is how games are won."]);
+    }
+    if (flat.length >= 5 && (64 - tally(after).b - tally(after).w) > 20 && kind !== "corner"){
+      notes.push(["warn", "That flipped " + flat.length + " discs. Early on a big capture is usually a " +
+        "big target: every disc you own is a disc that can be sandwiched back."]);
+    }
+
+    return "<p><code>" + sq(i) + "</code> flipped " + flat.length +
+      " disc" + (flat.length === 1 ? "" : "s") + ".</p>" +
+      notes.slice(0, 2).map(pair => '<p class="note ' + pair[0] + '">' + pair[1] + "</p>").join("");
+  }
+
+  // ---------------------------------------------------------- solo game flow
+  function newSoloGame(){
+    S.board = START.slice();
+    S.turn = BLACK;
+    S.me = BLACK;
+    S.over = false;
+    S.busy = false;
+    S.history = [];
+    S.hintAt = null;
+    S.last = -1;
+    S.lastBy = 0;
+    S.note = "";
+    refreshMoves();
+    draw();
+    updateWho();
+    status(whoLine());
+    say("<p>You are the Panther, and Panther opens. All four opening moves come to the same thing " +
+      "by symmetry.</p><p>Take corners, keep off the squares beside them, and keep your captures " +
+      "small.</p>");
+  }
+
+  function soloCommit(i, mover){
+    const before = S.board.slice();
+    S.history.push({ board: before, turn: S.turn });
+    const lines = linesFor(S.board, i, mover);
+    const flat = lines.flat();
+    const r = advance(S.board, i, mover);
+    S.board = r.board;
+    S.turn = r.turn;
+    S.over = r.over;
+    S.note = r.note;
+    S.last = i;
+    S.lastBy = mover;
+    S.hintAt = null;
+    refreshMoves();
+    draw(flipDelays(lines));
+    celebrate();
+    status(whoLine());
+    return { report: moveReport(before, i, mover, flat), note: r.note };
+  }
+
+  function soloMove(i){
+    const out = soloCommit(i, S.me);
+    say(out.report);
+    if (out.note) add('<p class="note good">' + esc(out.note) + "</p>");
+    if (soloFinished()) return;
+    if (S.turn === S.me){ add("<p>Your move again.</p>"); return; }
+    soloThink();
+  }
+
+  function soloThink(){
+    S.busy = true;
+    draw();
+    status(whoLine());
+    setTimeout(() => {
+      const i = chooseMove(S.board, S.turn, S.depth);
+      if (i === null){ S.busy = false; draw(); return; }
+      const out = soloCommit(i, S.turn);
+      S.busy = false;
+      draw();
+      add("<p><strong>Snow Leopard played " + sq(S.last) + "</strong>.</p>");
+      if (out.note) add('<p class="note warn">' + esc(out.note) + "</p>");
+      if (soloFinished()) return;
+      if (S.turn !== S.me){ soloThink(); return; }
+      status(whoLine());
+    }, 460);
+  }
+
+  function soloFinished(){
+    if (!S.over) return false;
+    const t = tally(S.board);
+    const drawn = t.b === t.w;
+    const youWon = t.b > t.w;
+    const head = drawn ? "<strong>A draw.</strong>"
+      : (youWon ? "<strong>You win.</strong>" : "<strong>Snow Leopard wins.</strong>");
+    add('<p class="note ' + (drawn ? "" : (youWon ? "good" : "warn")) + '">' + head +
+      " Panther " + t.b + ", Snow Leopard " + t.w + ". Only the count at the very end matters.</p>");
+    draw();
+    status(whoLine());
+    return true;
   }
 
   // -------------------------------------------------------- online table
@@ -945,6 +1196,11 @@
   }
 
   function updateWho(){
+    if (MODE === "solo"){
+      $("who-b").textContent = "you";
+      $("who-w").textContent = S.depth + " moves ahead";
+      return;
+    }
     $("who-b").textContent = nameFor(BLACK);
     $("who-w").textContent = nameFor(WHITE);
   }
@@ -1219,13 +1475,19 @@
     codeStatus("You are Panther and move first. Your friend joins by pasting your code.");
   }
 
-  function setSub(which){
-    F.sub = which;
-    $("sub-online").setAttribute("aria-selected", String(which === "live"));
-    $("sub-code").setAttribute("aria-selected", String(which === "code"));
-    $("online-panel").hidden = which !== "live";
-    $("code-panel").hidden = which !== "code";
-    if (which === "live"){
+  function setMode(m){
+    MODE = m;
+    F.sub = m === "code" ? "code" : "live";
+    $("tab-solo").setAttribute("aria-selected", String(m === "solo"));
+    $("tab-online").setAttribute("aria-selected", String(m === "online"));
+    $("tab-code").setAttribute("aria-selected", String(m === "code"));
+    $("opponent-card").hidden = m !== "solo";
+    $("coach-card").hidden = m !== "solo";
+    $("connect-card").hidden = m === "solo";
+    $("online-panel").hidden = m !== "online";
+    $("code-panel").hidden = m !== "code";
+    if (m === "solo"){ newSoloGame(); return; }
+    if (m === "online"){
       if (NET.phase === "live"){
         S.me = NET.colour;
         refreshMoves(); draw(); renderSeats();
@@ -1236,14 +1498,51 @@
         refreshMoves(); draw(); renderSeats();
         status("Create a table and send the code, or join the code your friend sends you.");
       }
-    } else {
-      if (codeStarted) renderCode(); else newCodeGame();
+      return;
     }
+    if (codeStarted) renderCode(); else newCodeGame();
   }
 
   // -------------------------------------------------------------- controls
-  $("sub-online").addEventListener("click", () => setSub("live"));
-  $("sub-code").addEventListener("click", () => setSub("code"));
+  $("tab-solo").addEventListener("click", () => setMode("solo"));
+  $("tab-online").addEventListener("click", () => setMode("online"));
+  $("tab-code").addEventListener("click", () => setMode("code"));
+
+  $("opponent").addEventListener("change", e => {
+    S.depth = parseInt(e.target.value, 10) || 3;
+    newSoloGame();
+  });
+  $("btn-new").addEventListener("click", newSoloGame);
+
+  $("btn-undo").addEventListener("click", () => {
+    if (MODE !== "solo" || S.busy || !S.history.length) return;
+    let step = S.history.pop();               // step back past the reply to your own turn
+    while (S.history.length && step.turn !== S.me) step = S.history.pop();
+    S.board = step.board;
+    S.turn = step.turn;
+    S.over = false;
+    S.hintAt = null;
+    S.last = -1;
+    S.lastBy = 0;
+    refreshMoves();
+    draw();
+    status(whoLine());
+    say("<p>Taken back. Try a different square.</p>");
+  });
+
+  $("btn-hint").addEventListener("click", () => {
+    if (MODE !== "solo" || S.busy || S.over || S.turn !== S.me || !S.moves.size) return;
+    S.hintAt = chooseMove(S.board, S.me, 4);
+    const why = {
+      corner: "it is a corner, and corners can never be flipped back",
+      edge:   "it takes edge ground without exposing a corner",
+      centre: "it keeps your shape tight and your opponent short of replies",
+      c:      "it is awkward, but every alternative here is worse",
+      x:      "it is an X-square, only ever right when the corner is already settled"
+    }[squareKind(S.hintAt)];
+    add('<p class="note good">Try <code>' + sq(S.hintAt) + "</code> &mdash; " + why + ".</p>");
+    draw();
+  });
   $("btn-create").addEventListener("click", createTable);
   $("btn-join").addEventListener("click", joinTable);
   $("join-code").addEventListener("keydown", e => { if (e.key === "Enter") joinTable(); });
@@ -1280,7 +1579,8 @@
   refreshMoves();
   draw();
   netPhase("idle");
-  setSub("live");
+  S.depth = parseInt($("opponent").value, 10) || 3;
+  setMode("solo");
 })();
 </script>
 </body>
