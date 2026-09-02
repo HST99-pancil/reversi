@@ -873,9 +873,7 @@
     if (NET.host){
       const lines = linesFor(S.board, i, NET.colour);
       applyLocal(i, NET.colour);
-      draw(flipDelays(lines || []));
-      celebrate();
-      broadcast();
+      broadcast(lines);
     } else {
       send({ t: "move", i });          // the host decides and sends the result back
     }
@@ -1155,10 +1153,15 @@
     status(whoLine() + (S.note ? " " + esc(S.note) : ""));
   }
 
-  function broadcast(){
+  // `lines` are the captured lines of the move just applied, used only for the
+  // flip animation. Repainting here is not optional: the legal squares have just
+  // changed, and without a redraw the board keeps offering the previous turn's.
+  function broadcast(lines){
     send({ t: "state", state: snapshot() });
     S.me = NET.colour;
     refreshMoves();
+    draw(lines ? flipDelays(lines) : undefined);
+    celebrate();
     renderSeats();
     status(whoLine() + (S.note ? " " + esc(S.note) : ""));
   }
@@ -1230,10 +1233,9 @@
       const theirs = other(NET.hostColour);
       if (S.over || S.turn !== theirs) return;
       if (!legalMoves(S.board, theirs).has(msg.i)) return;
+      const lines = linesFor(S.board, msg.i, theirs);
       applyLocal(msg.i, theirs);
-      draw(flipDelays(linesFor(strToBoard(boardToStr(S.board)), msg.i, theirs) || []));
-      celebrate();
-      broadcast();
+      broadcast(lines);
       return;
     }
     if (msg.t === "rematch"){
